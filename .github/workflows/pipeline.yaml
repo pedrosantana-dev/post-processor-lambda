@@ -3,58 +3,56 @@ on:
    push:
       branches:
         - beta
+
 jobs:
   build_and_deploy:
-  
      runs-on: ubuntu-latest
      steps:
-       - name: Checkout code 
+       - name: Checkout code
          uses: actions/checkout@v3
 
-       - name: Set up Node.js 
-         uses: actions/setup-node@v3 
+       - name: Debug - locate package.json and prisma schema
+         run: |
+           echo "---- repo root listing ----"
+           ls -la
+           echo "---- find all package.json files ----"
+           find . -name "package.json" -not -path "*/node_modules/*"
+           echo "---- find all schema.prisma files ----"
+           find . -name "schema.prisma" -not -path "*/node_modules/*"
+
+       - name: Set up Node.js
+         uses: actions/setup-node@v3
          with:
             node-version: '24'
 
        - name: Install dependencies
          run: npm install --include=dev
-         #run: npm install 
-         working-directory: src 
-        
-       - name: Debug - verify prisma install
-         run: |
-           echo "---- package.json devDependencies ----"
-           cat package.json
-           echo "---- node_modules/.bin listing ----"
-           ls -la node_modules/.bin/ | grep -i prisma || echo "prisma binary NOT found"
-           echo "---- node_modules/prisma ----"
-           ls -la node_modules/ | grep -i prisma || echo "prisma package NOT found in node_modules"
-       
-       - name: Backup and path schema.prisma for Lambda
-         run: |
-           cp prisma/schema.prisma prisma/schema.prisma.backup
-           sed -i 's/binaryTargets = \[.*\]/binaryTargets = ["native, rhel-openssl-3.0.x"]/' prisma/schema.prisma 
          working-directory: src
 
-       - name: Generate Prisma Client for Lambda 
+       - name: Backup and patch schema.prisma for Lambda
+         run: |
+           cp prisma/schema.prisma prisma/schema.prisma.backup
+           sed -i 's/binaryTargets = \[.*\]/binaryTargets = ["native", "rhel-openssl-3.0.x"]/' prisma/schema.prisma
+         working-directory: src
+
+       - name: Generate Prisma Client for Lambda
          run: ./node_modules/.bin/prisma generate
-         #run: npx prisma generate  
-         working-directory: src 
+         working-directory: src
 
-       - name: Restore original  schema.prisma 
-         run:  mv prisma/schema.prisma.backup prisma/schema.prisma 
-         working-directory: src 
+       - name: Restore original schema.prisma
+         run: mv prisma/schema.prisma.backup prisma/schema.prisma
+         working-directory: src
 
-       - name: Zip Lambda source and dependencies 
-         run:  |
-           cd src 
-           zip -r ../deployment.zip . -x "*.git*" "*.github*" "test/*" "*.log" "*md" "npm-debug.log" "yarn-debug.log" 
+       - name: Zip Lambda source and dependencies
+         run: |
+           cd src
+           zip -r ../deployment.zip . -x "*.git*" "*.github*" "test/*" "*.log" "*md" "npm-debug.log" "yarn-debug.log"
 
-       - name: Deploy to AWS Lambda 
+       - name: Deploy to AWS Lambda
          uses: appleboy/lambda-action@v0.2.0
          with:
-            aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID}}
-            aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}  
-            aws_region: ${{ secrets.AWS_REGION}}
+            aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+            aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            aws_region: ${{ secrets.AWS_REGION }}
             function_name: pora-scheduler-post-processor
             zip_file: deployment.zip
