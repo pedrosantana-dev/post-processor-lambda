@@ -1,0 +1,11 @@
+name: CI/CD Pipeline
+on:
+   push:
+      branches:
+        -master
+jobs:
+  build_and_deploy:
+  
+     runs-on: ubuntu-latest
+     steps:
+              
