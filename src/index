@@ -1,0 +1,254 @@
+/**
+ * pora-post-processor
+ * AWS Lambda function that consumes scheduled social media posts from SQS
+ * and publishes them to YouTube, Instagram, and Facebook.
+ *
+ * NOTE: This file was reconstructed based on package.json (dependencies)
+ * and schema.prisma (data model) — it is a best-effort inference, not a
+ * recovery of the original file. Review and adjust to match your actual
+ * business logic before deploying.
+ */
+
+const { PrismaClient } = require('@prisma/client');
+const { google } = require('googleapis');
+const CryptoJS = require('crypto-js');
+const Mailgun = require('mailgun.js');
+const formData = require('form-data');
+
+const prisma = new PrismaClient();
+
+const mailgun = new Mailgun(formData);
+const mg = mailgun.client({
+  username: 'api',
+  key: process.env.MAILGUN_API_KEY,
+});
+
+const ENCRYPTION_SECRET = process.env.TOKEN_ENCRYPTION_SECRET;
+const MAX_RETRIES = 3;
+
+/**
+ * Decrypts a token stored (encrypted) in the database.
+ */
+function decryptToken(encryptedToken) {
+  const bytes = CryptoJS.AES.decrypt(encryptedToken, ENCRYPTION_SECRET);
+  return bytes.toString(CryptoJS.enc.Utf8);
+}
+
+/**
+ * Publishes a post to YouTube (e.g. a community post / video update)
+ * using the account's stored OAuth credentials.
+ */
+async function publishToYouTube(socialAccount, post) {
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({
+    access_token: decryptToken(socialAccount.accessToken),
+    refresh_token: socialAccount.refreshToken
+      ? decryptToken(socialAccount.refreshToken)
+      : undefined,
+  });
+
+  const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+
+  // Placeholder: adjust to the actual YouTube endpoint you use
+  // (captions, video update, live broadcast, etc.)
+  const response = await youtube.videos.update({
+    part: ['snippet'],
+    requestBody: {
+      id: socialAccount.externalId,
+      snippet: {
+        description: post.content,
+      },
+    },
+  });
+
+  return response.data.id;
+}
+
+/**
+ * Publishes a post to Instagram via the Graph API.
+ */
+async function publishToInstagram(socialAccount, post) {
+  const accessToken = decryptToken(socialAccount.accessToken);
+  const igUserId = socialAccount.externalId;
+
+  const createResponse = await fetch(
+    `https://graph.facebook.com/v19.0/${igUserId}/media`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_url: post.mediaUrl,
+        caption: post.content,
+        access_token: accessToken,
+      }),
+    }
+  ).then((r) => r.json());
+
+  if (createResponse.error) {
+    throw new Error(`Instagram media creation failed: ${createResponse.error.message}`);
+  }
+
+  const publishResponse = await fetch(
+    `https://graph.facebook.com/v19.0/${igUserId}/media_publish`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        creation_id: createResponse.id,
+        access_token: accessToken,
+      }),
+    }
+  ).then((r) => r.json());
+
+  if (publishResponse.error) {
+    throw new Error(`Instagram publish failed: ${publishResponse.error.message}`);
+  }
+
+  return publishResponse.id;
+}
+
+/**
+ * Publishes a post to a Facebook Page via the Graph API.
+ */
+async function publishToFacebook(socialAccount, post) {
+  const accessToken = decryptToken(socialAccount.accessToken);
+  const pageId = socialAccount.externalId;
+
+  const endpoint = post.mediaUrl
+    ? `https://graph.facebook.com/v19.0/${pageId}/photos`
+    : `https://graph.facebook.com/v19.0/${pageId}/feed`;
+
+  const body = post.mediaUrl
+    ? { url: post.mediaUrl, caption: post.content, access_token: accessToken }
+    : { message: post.content, access_token: accessToken };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((r) => r.json());
+
+  if (response.error) {
+    throw new Error(`Facebook publish failed: ${response.error.message}`);
+  }
+
+  return response.id || response.post_id;
+}
+
+const PUBLISHERS = {
+  YOUTUBE: publishToYouTube,
+  INSTAGRAM: publishToInstagram,
+  FACEBOOK: publishToFacebook,
+};
+
+/**
+ * Sends a failure notification email to the post's owner.
+ */
+async function notifyFailure(user, post, error) {
+  if (!process.env.MAILGUN_DOMAIN || !user?.email) return;
+
+  try {
+    await mg.messages.create(process.env.MAILGUN_DOMAIN, {
+      from: `Pora Scheduler <noreply@${process.env.MAILGUN_DOMAIN}>`,
+      to: [user.email],
+      subject: 'Failed to publish your scheduled post',
+      text: `Your post scheduled for ${post.scheduledFor} on ${post.platform} failed to publish.\n\nReason: ${error.message}`,
+    });
+  } catch (mailErr) {
+    console.error('Failed to send failure notification email:', mailErr);
+  }
+}
+
+/**
+ * Processes a single scheduled post: fetches it, publishes it to the
+ * correct platform, and updates its status in the database.
+ */
+async function processPost(postId) {
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: postId },
+    include: { socialAccount: true, user: true },
+  });
+
+  if (!post) {
+    console.warn(`ScheduledPost ${postId} not found, skipping.`);
+    return;
+  }
+
+  if (post.status === 'PUBLISHED' || post.status === 'CANCELLED') {
+    console.log(`ScheduledPost ${postId} already in terminal status ${post.status}, skipping.`);
+    return;
+  }
+
+  await prisma.scheduledPost.update({
+    where: { id: postId },
+    data: { status: 'PROCESSING' },
+  });
+
+  const publish = PUBLISHERS[post.platform];
+  if (!publish) {
+    throw new Error(`Unsupported platform: ${post.platform}`);
+  }
+
+  try {
+    const externalPostId = await publish(post.socialAccount, post);
+
+    await prisma.scheduledPost.update({
+      where: { id: postId },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        externalPostId,
+        errorMessage: null,
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to publish ScheduledPost ${postId}:`, error);
+
+    const retryCount = post.retryCount + 1;
+    const status = retryCount >= MAX_RETRIES ? 'FAILED' : 'PENDING';
+
+    await prisma.scheduledPost.update({
+      where: { id: postId },
+      data: {
+        status,
+        retryCount,
+        errorMessage: error.message,
+      },
+    });
+
+    if (status === 'FAILED') {
+      await notifyFailure(post.user, post, error);
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Lambda handler. Triggered by an SQS event source mapping.
+ * Uses partial batch failure reporting so only failed messages are retried.
+ */
+exports.handler = async (event) => {
+  const batchItemFailures = [];
+
+  for (const record of event.Records) {
+    let messageBody;
+
+    try {
+      messageBody = JSON.parse(record.body);
+    } catch (error) {
+      console.error(`Invalid SQS message body for ${record.messageId}:`, error);
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+      continue;
+    }
+
+    try {
+      await processPost(messageBody.postId);
+    } catch (error) {
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+    }
+  }
+
+  return { batchItemFailures };
+};
+ 
