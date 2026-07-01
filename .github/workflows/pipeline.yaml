@@ -20,7 +20,16 @@ jobs:
          run: npm install --include=dev
          #run: npm install 
          working-directory: src 
-
+        
+       - name: Debug - verify prisma install
+         run: |
+           echo "---- package.json devDependencies ----"
+           cat package.json
+           echo "---- node_modules/.bin listing ----"
+           ls -la node_modules/.bin/ | grep -i prisma || echo "prisma binary NOT found"
+           echo "---- node_modules/prisma ----"
+           ls -la node_modules/ | grep -i prisma || echo "prisma package NOT found in node_modules"
+       
        - name: Backup and path schema.prisma for Lambda
          run: |
            cp prisma/schema.prisma prisma/schema.prisma.backup
