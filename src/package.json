@@ -7,12 +7,12 @@
    "scripts": {
      "test": "node test-syntax.js",
      "lint": "node --check index.js",
-     "validate": "npm run list && npm run test",
+     "validate": "npm run lint && npm run test",
      "zip": "zip -r ../lambda-function.zip .",
-     "deploy": "npm run zip && aws lambda update-function-code --function-name pora-scheduler-post-processor --zip file fil"
+     "deploy": "npm run zip && aws lambda update-function-code --function-name pora-scheduler-post-processor --zip-file fileb://lambda-function.zip"
    },
    "dependencies": {
-    "@prisma/client": "^5.24.00",
+    "@prisma/client": "^5.22.00",
     "@aws-sdk/client-sqs": "^3.658.1",
     "googleapis": "^144.0.0",
     "crypto-js": "^4.2.0",

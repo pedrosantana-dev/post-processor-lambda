@@ -2,7 +2,7 @@ name: CI/CD Pipeline
 on:
    push:
       branches:
-        -beta
+        - beta
 jobs:
   build_and_deploy:
   
@@ -28,13 +28,13 @@ jobs:
 
        - name: Generate Prisma Client for Lambda 
          run: npx prisma generate  
-         workin-directory: src 
-
-       - name: Restore original  schema.prisma 
-         run:  mv prisma/schema.prisma.backup prisma/schem.prisma 
          working-directory: src 
 
-       - name:: Zip Lambda source and dependencies 
+       - name: Restore original  schema.prisma 
+         run:  mv prisma/schema.prisma.backup prisma/schema.prisma 
+         working-directory: src 
+
+       - name: Zip Lambda source and dependencies 
          run:  |
            cd src 
            zip -r ../deployment.zip . -x "*.git*" "*.github*" "test/*" "*.log" "*md" "npm-debug.log" "yarn-debug.log" 
@@ -44,6 +44,6 @@ jobs:
          with:
             aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID}}
             aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}  
-            aws.region: ${{ secrets.AWS_REGION}}
+            aws_region: ${{ secrets.AWS_REGION}}
             function_name: pora-scheduler-post-processor
-            zip_file: deployment.zip 
+            zip_file: deployment.zip
