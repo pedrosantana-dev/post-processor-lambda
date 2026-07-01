@@ -17,7 +17,8 @@ jobs:
             node-version: '24'
 
        - name: Install dependencies
-         run: npm install 
+         run: npm install --include=dev
+         #run: npm install 
          working-directory: src 
 
        - name: Backup and path schema.prisma for Lambda
@@ -27,7 +28,8 @@ jobs:
          working-directory: src
 
        - name: Generate Prisma Client for Lambda 
-         run: npx prisma generate  
+         run: ./node_modules/.bin/prisma generate
+         #run: npx prisma generate  
          working-directory: src 
 
        - name: Restore original  schema.prisma 
