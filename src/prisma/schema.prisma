@@ -1,4 +1,4 @@
-Prisma schema for pora-post-processor
+//Prisma schema for pora-post-processor
 // AWS Lambda function that processes scheduled social media posts from SQS
 // NOTE: This file was reconstructed based on package.json (Prisma client,
 // SQS consumer, YouTube/Instagram/Facebook keywords) and pipeline.yaml
