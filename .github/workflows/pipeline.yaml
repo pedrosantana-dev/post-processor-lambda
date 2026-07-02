@@ -11,15 +11,6 @@ jobs:
        - name: Checkout code
          uses: actions/checkout@v3
 
-       - name: Debug - locate package.json and prisma schema
-         run: |
-           echo "---- repo root listing ----"
-           ls -la
-           echo "---- find all package.json files ----"
-           find . -name "package.json" -not -path "*/node_modules/*"
-           echo "---- find all schema.prisma files ----"
-           find . -name "schema.prisma" -not -path "*/node_modules/*"
-
        - name: Set up Node.js
          uses: actions/setup-node@v3
          with:
@@ -27,16 +18,6 @@ jobs:
 
        - name: Install dependencies
          run: npm install --include=dev
-         working-directory: src
-
-       - name: Debug - verify prisma install
-         run: |
-           echo "---- package.json devDependencies as used in this run ----"
-           node -e "console.log(JSON.stringify(require('./package.json').devDependencies, null, 2))"
-           echo "---- is prisma in node_modules? ----"
-           ls node_modules | grep -i prisma || echo "prisma NOT in node_modules"
-           echo "---- node_modules/.bin listing ----"
-           ls node_modules/.bin | grep -i prisma || echo "prisma binary NOT in .bin"
          working-directory: src
 
        - name: Backup and patch schema.prisma for Lambda
@@ -53,10 +34,25 @@ jobs:
          run: mv prisma/schema.prisma.backup prisma/schema.prisma
          working-directory: src
 
+       - name: Prune devDependencies before packaging
+         run: npm prune --omit=dev
+         working-directory: src
+
        - name: Zip Lambda source and dependencies
          run: |
            cd src
            zip -r ../deployment.zip . -x "*.git*" "*.github*" "test/*" "*.log" "*md" "npm-debug.log" "yarn-debug.log"
+
+       - name: Configure AWS credentials
+         uses: aws-actions/configure-aws-credentials@v4
+         with:
+           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+           aws-region: ${{ secrets.AWS_REGION }}
+
+       - name: Upload deployment package to S3
+         run: |
+           aws s3 cp deployment.zip s3://pora-lambda-deployments/pora-scheduler-post-processor/${{ github.sha }}.zip
 
        - name: Deploy to AWS Lambda
          uses: appleboy/lambda-action@v0.2.0
@@ -65,4 +61,5 @@ jobs:
             aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
             aws_region: ${{ secrets.AWS_REGION }}
             function_name: pora-scheduler-post-processor
-            zip_file: deployment.zip 
+            s3_bucket: pora-lambda-deployments
+            s3_key: pora-scheduler-post-processor/${{ github.sha }}.zip
